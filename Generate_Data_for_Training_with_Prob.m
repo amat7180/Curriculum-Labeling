@@ -17,7 +17,7 @@ num_datasets = length(src_datasets);
 for index_dataset = 1 : num_datasets
     idx_save = 0;
     name_dataset = src_datasets(index_dataset).name;
-    src_sub_dataset = [src_data_path, name_dataset, '/val/LF/'];
+    src_sub_dataset = [src_data_path, name_dataset, '/training/LF/'];
     folders = dir(src_sub_dataset);
     folders(1:2) = [];
     num_scene = length(folders); 
@@ -38,9 +38,11 @@ for index_dataset = 1 : num_datasets
         [U, V, H, W, ~] = size(LF);
                 
         % Load the probabilistic label map (Pb_map_y.npy)
-        Pb_map_dir = [src_data_path, name_dataset, '/val/probability/'];
+        Pb_map_dir = [src_data_path, name_dataset, '/training/probability/'];
         Pb_map_path = [Pb_map_dir, 'Pb_map_', num2str(index_scene), '.npy'];  % Adjust filename with scene index
         Pb_map_y = double(readNPY(Pb_map_path));
+        Pb_map_mask1_y = double(readNPY(Pb_map_path));
+        Pb_map_mask2_y = double(readNPY(Pb_map_path));
 
         % Generate patches of size 32*32
         for h = 1 : stride : H - patchsize + 1
@@ -50,6 +52,8 @@ for index_dataset = 1 : num_datasets
                 Hr_SAI_y = single(zeros(U * patchsize, V * patchsize));
                 Lr_SAI_y = single(zeros(U * patchsize * downRatio, V * patchsize * downRatio));             
                 Pb_SAI_y = double(zeros(patchsize, patchsize, 3));  % Initialize probabilistic patch
+                Pb_SAI_mask1_y = double(zeros(patchsize, patchsize, 3));
+                Pb_SAI_mask2_y = double(zeros(patchsize, patchsize, 3));
 
                 for u = 1 : U
                     for v = 1 : V     
@@ -69,7 +73,7 @@ for index_dataset = 1 : num_datasets
                     end
                 end
 
-                SavePath = ['./data_for_val/SR_', num2str(angRes), 'x' , num2str(angRes), '_' ,num2str(factor), 'x/', name_dataset,'/'];
+                SavePath = ['./data_for_training/SR_', num2str(angRes), 'x' , num2str(angRes), '_' ,num2str(factor), 'x/', name_dataset,'/'];
                 if exist(SavePath, 'dir')==0
                     mkdir(SavePath);
                 end
@@ -84,52 +88,35 @@ for index_dataset = 1 : num_datasets
                 
                 % Extract corresponding patch from the probabilistic map
                 Pb_SAI_y = Pb_map_y(h:h + patchsize - 1, w:w + patchsize - 1, :); 
-                h5create(SavePath_H5, '/Pb_SAI_y', size(Pb_SAI_y), 'Datatype', 'double');
-                h5write(SavePath_H5, '/Pb_SAI_y', Pb_SAI_y, [1, 1, 1], size(Pb_SAI_y));
+                Realpatchsize = 32;
+                central_u = ceil(angRes / 2);  % Central angular position (u)
+                central_v = ceil(angRes / 2);  % Central angular position (v)
+                Pb_Central_Patch = Pb_SAI_y((central_u - 1) * Realpatchsize + 1 : central_u * Realpatchsize, ...
+                            (central_v - 1) * Realpatchsize + 1 : central_v * Realpatchsize, :);
+
                 
-                % % Compare Hr_SAI_patch against Pb_SAI_y in the LF
-                % x = (3-1) * patchsize + 1;
-                % y = (3-1) * patchsize + 1;
-                % Hr_SAI_y_check = Hr_SAI_y(x:x+patchsize-1, y:y+patchsize-1);
-                % Pb_check = double(squeeze(LF(3, 3, h:h + patchsize - 1, w:w + patchsize - 1, :)));
-                % Pb_check_ycbcr = rgb2ycbcr(Pb_check);
-                % Pb_check_y = squeeze(Pb_check_ycbcr(:,:,1)); 
-                % 
-                % % Compute the Absolute Difference (AD)
-                % AD = abs(Hr_SAI_y_check - Pb_check_y);
-                % 
-                % % Print the extracted patch values for checking
-                % disp('Hr_SAI_y check values:');
-                % disp(Hr_SAI_y_check);
-                % disp('Probability map check values:');
-                % disp(Pb_check_y);  % Display the Y channel for comparison
-                % 
-                % % Print the shape of the AD
-                % disp('Shape of Hr_SAI_y check and Pb_check:');
-                % disp(size(Hr_SAI_y_check));  % Shape of high-resolution patch
-                % disp(size(Pb_check_y));      % Shape of probability map patch
-                % 
-                % % Print the AD values
-                % disp('Absolute Difference (AD) values:');
-                % disp(AD);
-                % 
-                % % Visualize the patches and AD for comparison
-                % figure;
-                % 
-                % subplot(1, 3, 1);
-                % imshow(Hr_SAI_y_check, []);
-                % title('High-Resolution SAI Patch');
-                % 
-                % subplot(1, 3, 2);
-                % imshow(Pb_check_y, []);
-                % title('Probability Map Patch');
-                % 
-                % subplot(1, 3, 3);
-                % imshow(AD, []);
-                % title('Absolute Difference (AD)');
-                % 
-                % % Add a pause to allow for visual inspection before moving on
-                % pause;
+                h5create(SavePath_H5, '/Pb_y', size(Pb_Central_Patch), 'Datatype', 'double');
+                h5write(SavePath_H5, '/Pb_y', Pb_Central_Patch, [1, 1, 1], size(Pb_Central_Patch));
+                
+                % Create Mask for Phase 2 i.e. exclude points where Class 0 is 1
+                mask2 = Pb_Central_Patch(:,:,1) < 1; % Class 0 are less than 1
+                Pb_SAI_mask2_y = Pb_Central_Patch .* mask2;
+                h5create(SavePath_H5, '/Pb_SAI_mask2_y', size(Pb_SAI_mask2_y), 'Datatype', 'double');
+                h5write(SavePath_H5, '/Pb_SAI_mask2_y', Pb_SAI_mask2_y, [1, 1, 1], size(Pb_SAI_mask2_y));
+
+                % Create Mask for Phase 1 i.e. exclude points where Class 0
+                % is 1 or when Class 1 and Class 2 are equal to 0.5
+                class0_probs = Pb_Central_Patch(:,:,1);  % Class 0 probabilites
+                class1_probs = Pb_Central_Patch(:,:,2);  % Class 1 probabilities
+                class2_probs = Pb_Central_Patch(:,:,3);  % Class 2 probabilities
+                exclude_class0 = abs(class0_probs - 1) < 1e-6;
+                exclude_class1_and_2 = (abs(class1_probs - 0.5) < 1e-6) & (abs(class2_probs - 0.5) < 1e-6);
+                exclude_conditions = exclude_class0 | exclude_class1_and_2;
+                mask1 = ~exclude_conditions;
+                Pb_SAI_mask1_y = Pb_Central_Patch .* mask1;
+                h5create(SavePath_H5, '/Pb_SAI_mask1_y', size(Pb_SAI_mask1_y), 'Datatype', 'double');
+                h5write(SavePath_H5, '/Pb_SAI_mask1_y', Pb_SAI_mask1_y, [1, 1, 1], size(Pb_SAI_mask1_y));
+
             end
         end
         fprintf([num2str(idx_scene_save), ' training samples have been generated\n']);
